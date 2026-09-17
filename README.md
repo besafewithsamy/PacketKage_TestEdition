@@ -128,21 +128,40 @@ PacketKage is not limited to security investigations. It also provides network h
 
 ### One command with containers (no prerequisites except the runtime)
 
-**Docker:**
+> **Authentication is required.** PacketKage has no local accounts and refuses
+> to serve protected routes (HTTP 503) until an OIDC provider is configured.
+> Either complete the built-in **setup wizard** at `/setup` (no env editing), or
+> configure it via `.env`. The fastest path to a bundled provider is the
+> Authentik stack — full walkthrough in
+> [docs/authentik-setup.md](docs/authentik-setup.md).
+
+**Option 1 — PacketKage only (existing OIDC provider):**
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build          # Docker — then open /setup and connect your provider
+podman-compose up -d --build          # Podman
 ```
 
-**Podman:**
+To configure declaratively instead of via the wizard, `cp .env.example .env`,
+set `PACKETKAGE_OIDC_*` and `PACKETKAGE_PUBLIC_URL`, then start (env values are
+authoritative and appear read-only in the wizard).
+
+**Option 2 — PacketKage + bundled Authentik (local evaluation):**
 
 ```bash
-podman-compose up -d --build
+cp .env.example .env   # set AUTHENTIK_* secrets
+echo '127.0.0.1 authentik' | sudo tee -a /etc/hosts
+docker compose -f docker-compose.yml -f docker-compose.authentik.yml up -d --build
 ```
 
-Then open [http://localhost:8000](http://localhost:8000) the full app (frontend + API) runs in a single container, with analysis data persisted in a named volume.
+Then create the provider, groups, and client credentials as described in
+[docs/authentik-setup.md](docs/authentik-setup.md), and open
+[http://localhost:8000](http://localhost:8000).
 
-The compose configuration binds PacketKage to `127.0.0.1` by default, so it is available only on the machine running the container. Do not change the port mapping to expose it on a LAN or the internet until you have placed it behind appropriate authentication and access controls.
+The compose configuration binds PacketKage to `127.0.0.1` by default, so it is
+reachable only from the machine running the container. To serve other machines,
+terminate TLS at a reverse proxy (sample: `reverse-proxy/nginx.conf`) and set
+`PACKETKAGE_PUBLIC_URL` to the public `https://` URL.
 
 Shutdown:
 
@@ -159,15 +178,29 @@ podman-compose down     # Podman
 
 ### Backend
 
+Authentication is mandatory, so export the OIDC settings before starting the
+API (see [docs/authentik-setup.md](docs/authentik-setup.md)):
+
 ```bash
 
 cd PacketKage/backend
 
 source .venv/bin/activate
 
+export PACKETKAGE_PUBLIC_URL=http://localhost:5173
+export PACKETKAGE_OIDC_ISSUER=https://authentik.example.com/application/o/packetkage/
+export PACKETKAGE_OIDC_CLIENT_ID=...
+export PACKETKAGE_OIDC_CLIENT_SECRET=...
+export PACKETKAGE_OIDC_REDIRECT_URI=http://localhost:5173/api/auth/callback
+
 python -m uvicorn app.main:app --reload --port 8000
 
 ```
+
+Protecting the dev server with real Authentik is awkward on a laptop; for
+day-to-day development, a different OIDC provider can be used as long as it
+speaks Authorization-Code + PKCE and can point its redirect URI at
+`http://localhost:5173/api/auth/callback`.
 
 > **Linux - enable live capture (one-time):** live sniffing needs `CAP_NET_RAW`/`CAP_NET_ADMIN`. Grant them to the venv interpreter instead of running the backend as root:
 >
@@ -199,6 +232,85 @@ npm run dev
 Then open:
 
 [http://localhost:5173](http://localhost:5173)
+
+## Authentication (OIDC / Authentik)
+
+PacketKage delegates all authentication to an OpenID Connect provider
+(Authentik by reference deployment). There are no local accounts and no
+password storage. The flow is standard **Authorization Code + PKCE**:
+
+1. The browser hits `/api/auth/login`, which redirects to the provider with a
+   `state`, `nonce`, and PKCE `code_challenge` (kept in a short-lived,
+   HttpOnly cookie).
+2. The provider authenticates the user and redirects back to
+   `/api/auth/callback`.
+3. The backend exchanges the code, validates the ID token (signature via JWKS,
+   issuer, audience, nonce, expiry) and mints its own **server-side session
+   cookie** (`HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS).
+4. Roles are derived **solely** from the token's group claim.
+
+| Authentik group      | Role    | Capabilities                                      |
+| -------------------- | ------- | ------------------------------------------------- |
+| `packetkage-admin`   | Admin   | Everything, including deleting captures and cases |
+| `packetkage-analyst` | Analyst | Upload, analyze, investigate (no destructive ops) |
+
+Users in neither group are refused at login. Group names are configurable via
+`PACKETKAGE_ADMIN_GROUP` / `PACKETKAGE_ANALYST_GROUP`.
+
+Configuration (`PACKETKAGE_OIDC_*`, see `.env.example`):
+
+| Variable                         | Purpose                                                        |
+| -------------------------------- | -------------------------------------------------------------- |
+| `PACKETKAGE_OIDC_ISSUER`         | Provider base URL; **required** or the API fails closed (503) |
+| `PACKETKAGE_OIDC_CLIENT_ID`      | OAuth client id                                                |
+| `PACKETKAGE_OIDC_CLIENT_SECRET`  | OAuth client secret                                            |
+| `PACKETKAGE_OIDC_REDIRECT_URI`   | Registered callback (default `…/api/auth/callback`)           |
+| `PACKETKAGE_PUBLIC_URL`          | Browser-facing base URL for post-login redirects               |
+| `PACKETKAGE_SESSION_TTL`         | Session lifetime in seconds (default 8h)                       |
+
+A step-by-step Authentik walkthrough — groups, provider, application, TLS
+reverse proxy, and troubleshooting — is in
+[docs/authentik-setup.md](docs/authentik-setup.md).
+
+### First-run setup wizard
+
+You do not have to hand-edit environment variables. While OIDC is unconfigured
+the API fails closed (503) and the UI automatically opens a **setup wizard** at
+[`/setup`](http://localhost:8000/setup). Enter the issuer URL, client ID/secret,
+public URL, and group names, click **Test connection** (it fetches the discovery
+document and signing keys), then **Save & enable**. The settings are written to
+the data volume (`/data/setup.json`, `0600`) and applied immediately — no
+restart, and they survive container recreation.
+
+* **Precedence:** environment variables always win. Any value set in the
+  environment appears **read-only** in the wizard.
+* **Remote access:** a wizard request from a non-loopback address needs the
+  one-time **bootstrap token**, printed in the backend startup logs and written
+  to `/data/setup-token`. Requests from `localhost` do not.
+* **Reconfiguration:** once configured, `/setup` requires an **admin** session
+  (analysts receive `403`).
+
+The wizard calls only `GET /api/setup/status` (public), and
+`GET /api/setup/config`, `POST /api/setup/test`, `POST /api/setup/oidc`
+(token- or admin-guarded); the client secret is never returned by the API.
+
+### Automated dev bootstrap (one command)
+
+For local development against the bundled Authentik, a helper script does the
+same thing without any typing — it writes `.env` secrets, starts the Authentik
+containers, creates the groups/provider/application via the Authentik API, and
+writes `backend/data/setup.json`:
+
+```bash
+python3 scripts/packetkage-setup.py            # full auto
+python3 scripts/packetkage-setup.py --dry-run  # show what it would do
+python3 scripts/packetkage-setup.py --manual   # paste a UI-created client id/secret
+python3 scripts/packetkage-setup.py --no-start # configure only, Authentik already up
+```
+
+It uses only the Python standard library, never starts the `packetkage`
+container (so it will not collide with a native `uvicorn` on `:8000`), and is
+safe to re-run. Override the browser URL with `--public-url http://localhost:8000`.
 
 ## Test Data
 
@@ -267,20 +379,30 @@ PacketKage/
 ├── backend/
 │   ├── app/
 │   │   ├── api/
+│   │   ├── auth/          # OIDC client, ID-token validation, sessions, guards
 │   │   ├── core/
 │   │   ├── db/
 │   │   ├── parsers/
 │   │   ├── repositories/
 │   │   ├── schemas/
 │   │   └── services/
-│   └── tests/
+│   └── tests/             # includes a fake OIDC provider used by the suite
 │
 ├── frontend/
-│   └── src/
-│       ├── api/
-│       ├── components/
-│       ├── pages/
-│       └── types/
+│   ├── src/
+│   │   ├── api/
+│   │   ├── auth/          # AuthContext + route guards
+│   │   ├── components/
+│   │   ├── pages/
+│   │   └── types/
+│   └── e2e/               # Playwright specs + standalone fake IdP
+│
+├── docs/
+│   └── authentik-setup.md
+├── reverse-proxy/
+│   └── nginx.conf
+├── docker-compose.yml
+├── docker-compose.authentik.yml
 │
 ├── scripts/
 │   └── generate_test_pcaps.py
@@ -298,6 +420,8 @@ PacketKage/
 * SQLite
 * Scapy
 * Pydantic
+* Authentik / OIDC (Authorization Code + PKCE, JWKS validation)
+* httpx, cryptography (token exchange + ID-token signature checks)
 
 ### Frontend
 
@@ -314,7 +438,10 @@ PacketKage/
 
 The project is covered by three test layers — backend pytest, frontend vitest, and end-to-end Playwright (the first two run in GitHub Actions CI, E2E runs locally):
 
-**Backend**  169 integration tests (pytest) over the full analysis pipeline, including the evidence graph, retry logic, and rule suites:
+**Backend** — integration tests (pytest) over the full analysis pipeline and the
+authentication stack (the suite runs a fake OIDC provider and exercises the
+real Authorization-Code + PKCE flow, ID-token validation failures, and
+admin/analyst authorization):
 
 ```bash
 cd backend
@@ -322,19 +449,22 @@ source .venv/bin/activate
 pytest tests/ -q
 ```
 
-**Frontend unit tests** (vitest):
+**Frontend unit tests** (vitest), including the auth context and route guards:
 
 ```bash
 cd frontend
 npm test
 ```
 
-**End-to-end** (Playwright) - boots both servers and drives the real UI:
+**End-to-end** (Playwright) - boots a fake IdP, the backend, and the Vite dev
+server, then drives the real UI (logging in through the provider first):
 
 * **Smoke**: upload → analyze → alerts - the whole product in one path
 * **Graph**: edge-type filter toggles, scale tiers, and the evidence graph v2 (provenance, attack path, blast radius, evidence chain)
 * **Export**: CSV export of flows, and the empty-filter toast case
 * **Delete**: upload → delete via confirmation modal → gone from list, including after analysis
+* **Auth**: sign-in/sign-out, session persistence, and admin-only navigation
+* **Analyst**: role boundary — no Admin nav, no delete affordances, Access denied on `/admin`
 
 Self-contained:
 
