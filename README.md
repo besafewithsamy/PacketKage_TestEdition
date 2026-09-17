@@ -132,13 +132,13 @@ PacketKage is not limited to security investigations. It also provides network h
 > to serve protected routes (HTTP 503) until an OIDC provider is configured.
 > Either complete the built-in **setup wizard** at `/setup` (no env editing), or
 > configure it via `.env`. The fastest path to a bundled provider is the
-> Authentik stack — full walkthrough in
+> Authentik stack - full walkthrough in
 > [docs/authentik-setup.md](docs/authentik-setup.md).
 
-**Option 1 — PacketKage only (existing OIDC provider):**
+**Option 1 - PacketKage only (existing OIDC provider):**
 
 ```bash
-docker compose up -d --build          # Docker — then open /setup and connect your provider
+docker compose up -d --build          # Docker - then open /setup and connect your provider
 podman-compose up -d --build          # Podman
 ```
 
@@ -146,7 +146,7 @@ To configure declaratively instead of via the wizard, `cp .env.example .env`,
 set `PACKETKAGE_OIDC_*` and `PACKETKAGE_PUBLIC_URL`, then start (env values are
 authoritative and appear read-only in the wizard).
 
-**Option 2 — PacketKage + bundled Authentik (local evaluation):**
+**Option 2 - PacketKage + bundled Authentik (local evaluation):**
 
 ```bash
 cp .env.example .env   # set AUTHENTIK_* secrets
@@ -268,8 +268,8 @@ Configuration (`PACKETKAGE_OIDC_*`, see `.env.example`):
 | `PACKETKAGE_PUBLIC_URL`          | Browser-facing base URL for post-login redirects               |
 | `PACKETKAGE_SESSION_TTL`         | Session lifetime in seconds (default 8h)                       |
 
-A step-by-step Authentik walkthrough — groups, provider, application, TLS
-reverse proxy, and troubleshooting — is in
+A step-by-step Authentik walkthrough - groups, provider, application, TLS
+reverse proxy, and troubleshooting - is in
 [docs/authentik-setup.md](docs/authentik-setup.md).
 
 ### First-run setup wizard
@@ -279,7 +279,7 @@ the API fails closed (503) and the UI automatically opens a **setup wizard** at
 [`/setup`](http://localhost:8000/setup). Enter the issuer URL, client ID/secret,
 public URL, and group names, click **Test connection** (it fetches the discovery
 document and signing keys), then **Save & enable**. The settings are written to
-the data volume (`/data/setup.json`, `0600`) and applied immediately — no
+the data volume (`/data/setup.json`, `0600`) and applied immediately - no
 restart, and they survive container recreation.
 
 * **Precedence:** environment variables always win. Any value set in the
@@ -297,7 +297,7 @@ The wizard calls only `GET /api/setup/status` (public), and
 ### Automated dev bootstrap (one command)
 
 For local development against the bundled Authentik, a helper script does the
-same thing without any typing — it writes `.env` secrets, starts the Authentik
+same thing without any typing - it writes `.env` secrets, starts the Authentik
 containers, creates the groups/provider/application via the Authentik API, and
 writes `backend/data/setup.json`:
 
@@ -436,9 +436,9 @@ PacketKage/
 
 ## Testing
 
-The project is covered by three test layers — backend pytest, frontend vitest, and end-to-end Playwright (the first two run in GitHub Actions CI, E2E runs locally):
+The project is covered by three test layers - backend pytest, frontend vitest, and end-to-end Playwright (the first two run in GitHub Actions CI, E2E runs locally):
 
-**Backend** — integration tests (pytest) over the full analysis pipeline and the
+**Backend** - integration tests (pytest) over the full analysis pipeline and the
 authentication stack (the suite runs a fake OIDC provider and exercises the
 real Authorization-Code + PKCE flow, ID-token validation failures, and
 admin/analyst authorization):
@@ -464,7 +464,7 @@ server, then drives the real UI (logging in through the provider first):
 * **Export**: CSV export of flows, and the empty-filter toast case
 * **Delete**: upload → delete via confirmation modal → gone from list, including after analysis
 * **Auth**: sign-in/sign-out, session persistence, and admin-only navigation
-* **Analyst**: role boundary — no Admin nav, no delete affordances, Access denied on `/admin`
+* **Analyst**: role boundary - no Admin nav, no delete affordances, Access denied on `/admin`
 
 Self-contained:
 
@@ -485,7 +485,7 @@ PacketKage can also record traffic directly from a network interface  no upload 
 
 The recorded traffic is saved as a PCAP and flows through the exact same analysis pipeline as an upload  flows, hosts, alerts, timeline, everything.
 
-> Note: live sniffing needs elevated permissions — the container grants them via `cap_add` (`NET_RAW`/`NET_ADMIN` in `docker-compose.yml`), and the image ships file capabilities on the interpreter so the backend runs as a non-root user. For native (non-Docker) setups, grant the venv interpreter the capabilities instead of running as root (see the Backend section above). Interface listing and all other features work unprivileged.
+> Note: live sniffing needs elevated permissions - the container grants them via `cap_add` (`NET_RAW`/`NET_ADMIN` in `docker-compose.yml`), and the image ships file capabilities on the interpreter so the backend runs as a non-root user. For native (non-Docker) setups, grant the venv interpreter the capabilities instead of running as root (see the Backend section above). Interface listing and all other features work unprivileged.
 
 **Docker / Podman specifics:**
 
